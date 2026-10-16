@@ -90,6 +90,16 @@ scaling it to bulk runs on `D:\Election_Download\Uttar_Pradesh`. Dates in 2026-1
   adaptation guide retargeted at `main.py`; legacy script notes kept.
 - This file (`changes_log.md`).
 
+## 22. XLSX-only outputs (disk saver, code kept)
+
+- `ensemble_v2.py` no longer writes `_tes.txt` / `_chrome_raw.md` / `.csv` –
+  the three writes are commented out in place (marked `DISK-SAVER`), nothing
+  deleted; uncomment to re-enable for debugging. Output per PDF is now just
+  `<stem>_ensemble.xlsx` (+ tiny `ensemble.log` / `ensemble_state.json`).
+- Verified with a 1-page smoke run to a temp dir (36 rows, only xlsx+log+state).
+- Note: the last full 806-row `*_ensemble.xlsx` in `D:\Election_Output` was
+  overwritten by a `--pages 2` test run – re-run without `--pages` to restore.
+
 ## 21. Ensemble runs like main.py (multi-PDF, dry-run, resume)
 
 - `ensemble_v2.py` accepts a file **or** folder: `--district/--ac` filters,

@@ -847,7 +847,8 @@ def finalize_merged(rows):
 
 def write_ensemble(df, xlsx_path, logger):
     csv_path = Path(str(xlsx_path)).with_suffix(".csv")
-    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    # DISK-SAVER: CSV twin disabled (xlsx only). Uncomment to re-enable.
+    # df.to_csv(csv_path, index=False, encoding="utf-8-sig")
     df.to_excel(xlsx_path, index=False)
     try:
         from openpyxl import load_workbook
@@ -1133,9 +1134,10 @@ def run_one_pdf(pdf, out_dir, args, logger, state):
 
     logger.info("=== STAGE 1a: Tesseract (%d pages) ===", len(pages))
     tes_cards, tes_audit, n_blocks = run_tesseract(str(pdf), stem, pages, args, logger)
-    (out_dir / (stem + "_tes.txt")).write_text(
-        "TES audit %s | %d blocks\n\n" % (stem, n_blocks) + "\n".join(tes_audit),
-        encoding="utf-8")
+    # DISK-SAVER: tes audit TXT disabled (xlsx only). Uncomment to re-enable.
+    # (out_dir / (stem + "_tes.txt")).write_text(
+    #     "TES audit %s | %d blocks\n\n" % (stem, n_blocks) + "\n".join(tes_audit),
+    #     encoding="utf-8")
     logger.info("tes: %d blocks -> %d records", n_blocks, len(tes_cards))
 
     logger.info("=== STAGE 1b: Chrome (%d pages) ===", len(pages))
@@ -1144,8 +1146,9 @@ def run_one_pdf(pdf, out_dir, args, logger, state):
     except RuntimeError as err:
         logger.error("%s", err)
         return "error"
-    (out_dir / (stem + "_chrome_raw.md")).write_text(
-        "# %s (raw shuffled)\n\n" % stem + "\n\n".join(chr_raw), encoding="utf-8")
+    # DISK-SAVER: chrome raw-MD audit disabled (xlsx only). Uncomment to re-enable.
+    # (out_dir / (stem + "_chrome_raw.md")).write_text(
+    #     "# %s (raw shuffled)\n\n" % stem + "\n\n".join(chr_raw), encoding="utf-8")
     logger.info("chrome: %d cards", len(chr_cards))
 
     logger.info("=== STAGE 2: merge ===")

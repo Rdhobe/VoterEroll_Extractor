@@ -135,8 +135,10 @@ Extra flags over `main.py`: `--chrome-dpi` (default 200), `--ocr-lang`
 (default `hin+eng`); `--pages` counts data pages *after* `--skip-pages`
 (default `1,2`); resume state in `<output>/ensemble_state.json`.
 Single-file outputs sit directly in `--output`:
-`<stem>_ensemble.xlsx + .csv` (merged table),
-`<stem>_tes.txt` + `<stem>_chrome_raw.md` (per-engine audits). Matching runs
+`<stem>_ensemble.xlsx` (merged table).
+Per-engine audits (`<stem>_tes.txt`, `<stem>_chrome_raw.md`) and the CSV twin
+are commented out in the code (search `DISK-SAVER`) to save space – uncomment to
+re-enable for debugging. Matching runs
 name → fuzzy name → ID → serial; every disagreement lands in `Conflicts`,
 single-engine-only rows are kept (`tes-only` / `chrome-only`), agreed rows need
 no review.
@@ -144,6 +146,18 @@ Measured on the Agra test roll: 806 rows (606 name / 89 tes-only / 78 chrome-onl
 29 id / 4 serial). See §6 for the full accuracy table.
 Note: Chrome Screen AI is slightly nondeterministic – reruns of
 the same page can differ by a character or two.
+
+#### Timing (measured 2026-10-16, same 28-page roll, laptop CPU)
+
+| Stage | Time | Per page |
+|---|---|---|
+| Tesseract render + detect + box OCR (732 boxes) | ~165 s | ~6.3 s |
+| Chrome page OCR (26 pages) | ~58 s | ~2.2 s |
+| Merge 800 rows | ~1 s | – |
+| **Full roll wall time** | **223.7 s (~3.7 min)** | **~218 voter rows/min** |
+
+Budget ~4 min per 30-page roll on one machine when planning bulk runs
+(Agra's 3,932 PDFs ≈ 11 days single-machine – split `--district`s across machines).
 
 ---
 
