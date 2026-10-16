@@ -1,4 +1,4 @@
-# Shakkti OCR to Text Conversion – Voter List Extraction Pipeline
+# OCR to Text Conversion – Voter List Extraction Pipeline
 
 Converts scanned/printed **voter-list PDFs** into structured tables with one row per voter.
 Started with the **Marathi** Pune Prabhag-29 draft roll (6,905 pages); now also handles
@@ -183,7 +183,53 @@ Each XLSX has frozen header, autofilter and column widths; the `.csv` twin
 
 ---
 
-## 6. Known limitations (please read before using the data)
+## 6. Measured accuracy (ground truth: `gijauli_voter_list.md`)
+
+728 hand-mapped voter cards (PDF pp. 3–27, same Agra roll) with per-card OCR text
+were parsed to `Serial/Page/EPIC/Name/Relation/House/Age/Gender` and scored
+against all three pipelines. Method: normalized-name match (spaces, punctuation,
+nukta, anusvara, zero-width and junk-tail fragments like `जाना`/`oe` folded on
+*both* sides); every denominator below is GT-valid values only (GT itself is
+per-card OCR – 210 strict EPICs, 361 clean age/sex lines – and disclaims 100%).
+±0.5 pt wobble comes from scoring-normalization refinements between runs.
+
+| Metric (denominator) | TES `main.py` | CHR `chrome_script.py` | ENS `ensemble_v2.py` |
+|---|---|---|---|
+| Voter detection (/725 names) | 83.2% (603) | 91.2% (661) | **93.2% (676)** |
+| EPIC exact | **72.1%** (101/140) | 23.6% (39/165) | 59.1% (94/159) |
+| Relation type | 91.8% (404/440) | 92.6% (461/498) | **96.1%** (472/491) |
+| Relative name | 80.0% (352/440) | 84.5% (421/498) | **86.2%** (423/491) |
+| House | 35.2% (124/352) | 26.1% (105/403) | **41.3%** (164/397) |
+| Age | **83.8%** (171/204) | 81.2% (182/224) | 83.0% (186/224) |
+| Gender | **95.5%** (212/222) | 90.5% (220/243) | 94.7% (233/246) |
+
+Ensemble output on the test roll: **806 rows** – 606 name-matched, 89 tes-only,
+78 chrome-only, 29 ID-linked, 4 serial-linked; 692 rows carry notes, ~640 hard
+conflicts. Deduplicate keys are clean on v1 (TES 1.6%, CHR 0.0% duplicate
+page+serial); v2 shows 10.3% from unmerged same-serial leftovers (known gap).
+
+Reading: content OCR is strong everywhere (gender 90–95%, relation ~92–96%);
+the war is **linking** – TES box crops localize EPICs but miss cards, chrome
+finds cards but mislinks EPICs serially. Target for model-training fields was
+all-five >90% (Name/Gender/Age/Relative/Relation): Relation 96.1 ✓, Gender 94.7 ✓,
+Name 93.2 ✓, Relative 86.2, Age 83.0 – residuals are both-engines-wrong misreads,
+shuffled-page mislinks and GT's own OCR noise (both engines agree against GT in
+~18% of age and ~27% of relative agreements). The remaining gap is a **~160-row
+review queue**, not more tuning – filter it with:
+
+```python
+df = pd.read_excel("<stem>_ensemble.xlsx")
+age_q = df[df["Conflicts"].str.contains("age ", na=False)]
+reln_q = df[df["Conflicts"].str.contains("Relative_Name|relation==", na=False)]
+```
+
+Full campaign history (rules tried, measurements, reversions) is in
+`changes_log.md` §19; the evaluator lives outside the repo
+(`eval_acc2.py` – GT parse + scoring, denominators = GT-valid only).
+
+---
+
+## 7. Known limitations (please read before using the data)
 
 - **OCR quality.** Even after the fixes, ~20% of rows have no strict `Voter_ID`
   (header line unreadable) and `Serial_No` is found on ~1/3 of Hindi rows – use the

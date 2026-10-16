@@ -106,6 +106,33 @@ file+console logging are built in – see `README.md §3` for the CLI.
 
 ---
 
+## 🧬 Ensemble v2 (`scripts/ensemble_v2.py`)
+
+Self-contained merger (v1 files frozen): Tesseract side + Chrome side run on the
+same page set (default pp. 3+, `--skip-pages 1,2`), then voters are matched
+**name → fuzzy name (≥0.88, blocked on conflicting strict IDs) → strict ID →
+(page, serial)**; leftovers survive as `tes-only` / `chrome-only` rows.
+
+Adjudication (a blank never beats a value; conflicts always flagged in
+`Conflicts`, hard/soft split in logs, conflicted rows shaded pink):
+- Serial/Name/Relation/Age/Gender/House: Tesseract pick on conflict
+  (measured: age TES-right 14 vs CHR-right 3 on disagreements)
+- EPIC `AAA1234567` conflict: Tesseract (measured 71.6% vs 24.4%)
+- `UP/…` conflict: longer (more complete)
+- Relative name: dissimilar pairs take the longer read, close pairs chrome
+- Age: triple vote (tes full-read, tes age-strip whitelist re-OCR, chrome);
+  2/3 majority wins, full split falls back to Tesseract
+- Chrome EPIC failing strict validation is dropped + noted, never linked on
+- Shared strict ID across rows is detected and flagged
+- Name assembly: order-zip primary (correct for both `[N,F]*` and `[Ns,Fs]`
+  OCR layouts), positional-chunking fallback with `chunk fallback` flag
+
+Measured on the Agra roll (see `README.md` §6): 806 rows, ENS wins detection
+(93.2%) and 4/7 fields; TES stays EPIC king (71.6%). Chrome Screen AI is mildly
+nondeterministic across reruns – same page can differ by a character.
+
+---
+
 ## Legacy three-script flow (superseded, reference only)
 
 - `main_pdf_to_img.py` – all PNGs rendered up front (`ZOOM_FACTOR 3.0`).

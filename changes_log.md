@@ -90,6 +90,39 @@ scaling it to bulk runs on `D:\Election_Download\Uttar_Pradesh`. Dates in 2026-1
   adaptation guide retargeted at `main.py`; legacy script notes kept.
 - This file (`changes_log.md`).
 
+## 20. Stats consolidated into docs
+
+- `README.md` §6 "Measured accuracy": full GT table (TES/CHR/ENS final numbers),
+  ensemble output shape (806 rows: 606 name / 89 tes-only / 78 chrome-only /
+  29 id / 4 serial; 692 noted, ~640 hard), review-queue pandas recipes,
+  methodology + GT-caveat notes.
+- `docs/README_OCR_PIPELINE.md`: new ensemble-v2 technical section (matching
+  passes, adjudication rules incl. measured preferences, zip/chunk assembly,
+  nondeterminism caveat).
+- `changes_log.md` §18 table corrected to final measured numbers (earlier
+  drafts carried ±0.5 pt scoring-normalization wobble; verdicts unchanged).
+
+## 19. The 90% campaign (important fields: Name/Gender/Age/Relative/Relation)
+
+- Demand: all five >90% (House/EPIC may slide). Start (ENS): Rel 96.3 ✓,
+  Sex 95.1 ✓, Name 92.4 ✓ | Reln 78.4 ✗, Age 83.4 ✗.
+- Diagnosis first: age "misses" were 90% float-formatting artifacts in the
+  scorer; real gap = wild digit diffs. Reln misses = GT-side junk
+  ("जाना oe", "[|"), nukta/anusvara variants, genuine misreads.
+- Shipped (v2 only, v1 frozen): canonical norm (nukta/anusvara/ZW) for matching;
+  junk-tail stripping on names; decoupled age/sex regexes + उम्र pattern;
+  colon/का optional (recall); Relative→chrome preference (measured 79-vs-34);
+  tes PSM-3 retry for nameless boxes; tes age-strip whitelist second read;
+  3-vote age adjudication; zip-primary/chunk-fallback card assembly.
+- Measured dead-ends (reverted, logged): age longer-pick 0/9, reln longer-pick
+  4/9 on close pairs (kept only for dissimilar pairs).
+- Landing (ENS, GT-scored): Rel **96.1** ✓, Sex **94.7** ✓, Name **93.2** ✓,
+  Reln **86.2**, Age **83.0**. Residuals are both-engines-wrong misreads,
+  shuffled-page mislinks, and GT's own OCR noise (both-agree-against-GT cases;
+  GT file itself disclaims 100%).
+- Path to 90+: review queue is 161/806 rows for age+reln (field-specific
+  Conflicts substrings) – each resolvable against the page image in seconds.
+
 ## 18. Ground-truth accuracy table (`gijauli_voter_list.md`, 728 cards)
 
 - GT parsed to `gt_parsed.csv` (page/serial/EPIC/name/relation/house/age/gender;
@@ -97,15 +130,15 @@ scaling it to bulk runs on `D:\Election_Download\Uttar_Pradesh`. Dates in 2026-1
 - Method: (a) detection = GT name found anywhere in output; (b) field accuracy
   on normalized-name-matched voters (denominators = GT-valid values only).
 
-| Metric (denominator) | TES (main.py) | CHR (chrome) | ENS (v2) |
+| Metric (denominator) | TES (main.py) | CHR (chrome) | ENS (v2, final) |
 |---|---|---|---|
-| Voter detection (/725 names) | 82.5% (598) | 90.2% (654) | **92.4% (670)** |
-| EPIC exact (/~150 GT EPICs) | **71.6%** | 24.4% | 58.8% |
-| Relation type | 91.8% | 92.5% | **96.3%** |
-| Relative name | 75.1% | 78.1% | **78.4%** |
-| House | 34.9% | 25.9% | **40.8%** |
-| Age | **83.8%** | 81.2% | 83.4% |
-| Gender | **95.5%** | 90.5% | 95.1% |
+| Voter detection (/725 names) | 83.2% (603) | 91.2% (661) | **93.2% (676)** |
+| EPIC exact | **72.1%** (101/140) | 23.6% (39/165) | 59.1% (94/159) |
+| Relation type | 91.8% (404/440) | 92.6% (461/498) | **96.1%** (472/491) |
+| Relative name | 80.0% (352/440) | 84.5% (421/498) | **86.2%** (423/491) |
+| House | 35.2% (124/352) | 26.1% (105/403) | **41.3%** (164/397) |
+| Age | **83.8%** (171/204) | 81.2% (182/224) | 83.0% (186/224) |
+| Gender | **95.5%** (212/222) | 90.5% (220/243) | 94.7% (233/246) |
 | Duplicate (page,serial) keys | 1.6% | 0.0% | 10.3% (fix: merge leftovers sharing serial) |
 
 - Reading: content OCR is strong everywhere (gender 90–95%, relation ~92–96%);

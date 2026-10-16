@@ -28,6 +28,7 @@ Usage:
 """
 import argparse
 import contextlib
+import difflib
 import logging
 import os
 import re
@@ -203,6 +204,7 @@ def preprocess_roi(roi):
 
 
 def ocr_block(roi, config_full, config_epic):
+    """Full-block OCR + header-strip re-OCR. Returns (text, epic_hint, proc)."""
     proc = preprocess_roi(roi)
     try:
         full = pytesseract.image_to_string(proc, config=config_full)
@@ -221,7 +223,7 @@ def ocr_block(roi, config_full, config_epic):
             epic_fix = m.group(0)
     except Exception:
         pass
-    return full, epic_fix
+    return full, epic_fix, proc
 
 
 def parse_block(block_text, filename, epic_hint=None):
@@ -293,9 +295,9 @@ def parse_block(block_text, filename, epic_hint=None):
 DEV_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
 RE_SERIAL = re.compile(r"^\s*(\d{1,4})\s*$", re.M)
 RE_EPIC = re.compile(r"^\s*([A-Z]{2,4}\d{6,8}|UP/\d+/\d+/\d+)\s*$", re.M)
-COLON = r"\s*[:ः]+\s*"
-RE_NAME = re.compile(rf"^\s*नाम{COLON}(.+?)\s*$", re.M)
-RE_REL = re.compile(rf"^\s*(पिता|पति|माता|अन्य)\s*(?:का\s*)+नाम{COLON}(.+?)\s*$", re.M)
+COLON = r"\s*[:ः]*\s*"  # colons are often dropped by OCR -> optional
+RE_NAME = re.compile(rf"^\s*नाम(?![\u0900-\u097F]){COLON}(.+?)\s*$", re.M)
+RE_REL = re.compile(rf"^\s*(पिता|पति|माता|अन्य)\s*(?:का\s*)?नाम{COLON}(.+?)\s*$", re.M)
 RE_HOUSE = re.compile(rf"मकान\s*संख्या{COLON}(\S+)")
 RE_AGE_SEX = re.compile(rf"आयु{COLON}(\d+)\s*लिंग{COLON}(पुरुष|महिला|अन्य|\S+)")
 RE_AGE_ALONE = re.compile(rf"आयु{COLON}(\d+)")
@@ -340,6 +342,33 @@ def clean_md(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip(" ):(")
 
 
+def _chunk_fields(chunk):
+    """First-match field parse of one card chunk. Shared by both paths."""
+    rm = RE_REL.search(chunk)
+    hm = RE_HOUSE.search(chunk)
+    am = RE_AGE_SEX.search(chunk)
+    aa = am or RE_AGE_ALONE.search(chunk)
+    sm = am or RE_SEX_ALONE.search(chunk)
+    notes = []
+    rel_type, rel_name = (rm.group(1), dejunk_name(re.sub(r"^नाम\s*[:ः]\s*", "", clean_md(rm.group(2))))) if rm else ("", "")
+    if rm and RE_REL.search(chunk, rm.end()):
+        notes.append("2nd relation in block ignored")
+    house = clean_md(hm.group(1)) if hm else ""
+    if not hm:
+        notes.append("house missing")
+    if aa:
+        age = int(aa.group(1))
+    else:
+        age = ""
+        notes.append("age missing")
+    if sm:
+        gender = sm.group(2) if sm.re is RE_AGE_SEX else sm.group(1)
+    else:
+        gender = ""
+        notes.append("sex missing")
+    return rel_type, rel_name, house, age, gender, notes
+
+
 def parse_md_page(page_no: int, txt: str) -> list:
     txt = txt.translate(DEV_DIGITS)
     txt = re.sub(r"^\s*#+\s*", "", txt, flags=re.M)
@@ -349,41 +378,50 @@ def parse_md_page(page_no: int, txt: str) -> list:
         if txt.strip():
             print(f"  ! page {page_no}: no Name lines found", file=sys.stderr)
         return []
+    names = [dejunk_name(clean_md(m.group(1))) for m in name_hits]
+    # combined-list counts (agesex needs BOTH halves present, like the old zip)
+    rel_all = RE_REL.findall(txt)
+    house_all = RE_HOUSE.findall(txt)
+    agesex_all = RE_AGE_SEX.findall(txt)
+    n = len(names)
     cards = []
-    for k, m in enumerate(name_hits):
-        chunk = txt[m.start():name_hits[k + 1].start() if k + 1 < len(name_hits) else len(txt)]
-        name = dejunk_name(clean_md(m.group(1)))
-        rm = RE_REL.search(chunk)
-        hm = RE_HOUSE.search(chunk)
-        am = RE_AGE_SEX.search(chunk)
-        aa = am or RE_AGE_ALONE.search(chunk)
-        sm = am or RE_SEX_ALONE.search(chunk)
-        notes = []
-        rel_type, rel_name = (rm.group(1), dejunk_name(re.sub(r"^नाम\s*[:ः]\s*", "", clean_md(rm.group(2))))) if rm else ("", "")
-        if rm and RE_REL.search(chunk, rm.end()):
-            notes.append("2nd relation in block ignored")
-        house = clean_md(hm.group(1)) if hm else ""
-        if not hm:
-            notes.append("house missing")
-        if aa:
-            age = int(aa.group(1))
-        else:
-            age = ""
-            notes.append("age missing")
-        if sm:
-            gender = sm.group(2) if sm.re is RE_AGE_SEX else sm.group(1)
-        else:
-            gender = ""
-            notes.append("sex missing")
-        if rel_name and rel_name == name:
-            rel_name = ""
-            notes.append("relation==name dropped")
-        if rel_type == "पति" and gender == "पुरुष":
-            notes.append("relation/gender conflict")
-        cards.append(dict(Name=name, Relation_Type=rel_type, Relation_Name=rel_name,
-                          House=house, Age=age, Gender=gender, _notes=notes,
-                          _file_pos=k))
-    n = len(cards)
+    if len(rel_all) == len(house_all) == len(agesex_all) == n:
+        # PATH A - order zip: correct for BOTH [N,F]* and [Ns,Fs] layouts.
+        # (Positional chunking misfires on the latter: F1 lands in card 2.)
+        for k in range(n):
+            rel_type = rel_all[k][0]
+            rel_name = dejunk_name(re.sub(r"^नाम\s*[:ः]\s*", "", clean_md(rel_all[k][1])))
+            house = clean_md(house_all[k])
+            age, gender = int(agesex_all[k][0]), agesex_all[k][1]
+            notes = []
+            if rel_name and rel_name == names[k]:
+                rel_name = ""
+                notes.append("relation==name dropped")
+            if rel_type == "पति" and gender == "पुरुष":
+                notes.append("relation/gender conflict")
+            cards.append(dict(Name=names[k], Relation_Type=rel_type, Relation_Name=rel_name,
+                              House=house, Age=age, Gender=gender, _notes=notes,
+                              _file_pos=k))
+    else:
+        # PATH B - positional chunking fallback: a missing field empties only
+        # its own card (never shifts others). Everything here gets flagged.
+        print(f"  ! page {page_no}: counts differ (name={n}, rel={len(rel_all)}, "
+              f"house={len(house_all)}, agesex={len(agesex_all)}) - chunk fallback",
+              file=sys.stderr)
+        for k, m in enumerate(name_hits):
+            chunk = txt[m.start():name_hits[k + 1].start() if k + 1 < len(name_hits) else len(txt)]
+            rel_type, rel_name, house, age, gender, notes = _chunk_fields(chunk)
+            name = names[k]
+            if rel_name and rel_name == name:
+                rel_name = ""
+                notes.append("relation==name dropped")
+            if rel_type == "पति" and gender == "पुरुष":
+                notes.append("relation/gender conflict")
+            notes.append("chunk fallback")
+            cards.append(dict(Name=name, Relation_Type=rel_type, Relation_Name=rel_name,
+                              House=house, Age=age, Gender=gender, _notes=notes,
+                              _file_pos=k))
+        n = len(cards)
     serials = sorted(set(int(s) for s in serials))
     clusters, cur = [], []
     for s in serials:
@@ -548,20 +586,56 @@ def adjudicate_pair(t, c):
     for col, tc, cc in (("Relation_Type", "Relation_Type", "Relation_Type"),
                         ("Relative_Name", "Relative_Name", "Relation_Name"),
                         ("House_No", "House_No", "House")):
-        # Relative_Name prefers chrome: measured 79-vs-34 wins on disagreements
-        v, nn = pick_value(t.get(tc), c.get(cc),
-                           prefer=("chrome" if col == "Relative_Name" else "tes"),
-                           note_t=f"{col} tes-only", note_c=f"{col} chrome-only",
-                           note_both=f"{col} differs T:{t.get(tc)} C:{c.get(cc)}")
+        # Relative_Name: DISSIMILAR pairs take the LONGER read (extra words
+        # usually mean the other side dropped them - measured 32/79); CLOSE
+        # pairs (>=0.8, extra length is usually junk) fall back to chrome.
+        t_raw, c_raw = (t.get(tc) or "").strip(), (c.get(cc) or "").strip()
+        v, nn = "", ""
+        if (col == "Relative_Name" and t_raw and c_raw
+                and norm_name(t_raw) != norm_name(c_raw)
+                and difflib.SequenceMatcher(None, norm_name(t_raw),
+                                            norm_name(c_raw)).ratio() < 0.8):
+            v = t_raw if len(t_raw) >= len(c_raw) else c_raw
+            nn = f"{col} picked longer variant T:{t_raw} C:{c_raw}"
+        if not v and not nn:
+            v, nn = pick_value(t_raw, c_raw,
+                               prefer=("chrome" if col == "Relative_Name" else "tes"),
+                               note_t=f"{col} tes-only", note_c=f"{col} chrome-only",
+                               note_both=f"{col} differs T:{t_raw} C:{c_raw}")
         row[col] = v
         if nn:
-            (soft if "differs" not in nn else hard).append(nn)
+            hard_kw = ("differs", "conflict", "longer", "variant", "plausible")
+            (hard if any(k in nn for k in hard_kw) else soft).append(nn)
 
-    av, nn = pick_value(t.get("Age"), c.get("Age"),
-                        note_both=f"age differs T:{t.get('Age')} C:{c.get('Age')}")
+    # AGE: triple vote (tes full-read, tes age-strip, chrome). Two agreeing
+    # wins outright; full tie falls back to tes + hard flag.
+    def age_key(v):
+        v = str(v or "").strip()
+        try:
+            return str(int(v))  # '08' == '8'
+        except ValueError:
+            return v or ""
+
+    votes = [age_key(t.get("Age")), age_key(t.get("AgeStrip")),
+             age_key(c.get("Age"))]
+    votes = [v for v in votes if v]
+    av, nn = "", ""
+    if not votes:
+        av = ""
+    elif len(set(votes)) == 1:
+        av = votes[0]
+    else:
+        top = max(set(votes), key=votes.count)
+        if votes.count(top) >= 2:
+            av = top
+            outsiders = sorted(set(votes) - {top})
+            nn = f"age 2/3 agree ({top} vs {','.join(outsiders)})"
+        else:
+            av, nn = votes[0], (f"age 3-way split "
+                                f"T:{t.get('Age')}/{t.get('AgeStrip')} C:{c.get('Age')}")
     row["Age"] = av
     if nn:
-        (soft if "differs" not in nn else hard).append(nn)
+        (soft if nn.startswith("age 2/3") else hard).append(nn)
 
     cg = CHR_GENDER.get((c.get("Gender") or "").strip(), (c.get("Gender") or "").strip())
     gv, nn = pick_value(t.get("Gender"), cg,
@@ -577,13 +651,14 @@ def adjudicate_pair(t, c):
 def singleton_row(side, card, page):
     """A card found by only one engine - kept with full provenance."""
     if side == "tes":
+        tage = (card.get("Age") or "").strip() or (card.get("AgeStrip") or "").strip()
         return {
             "Source_Page": page, "Serial_No": (card.get("Serial_No") or "").strip(),
             "Voter_ID": (card.get("Voter_ID") or "").strip(),
             "Name": (card.get("Name") or "").strip(),
             "Relation_Type": (card.get("Relation_Type") or "").strip(),
             "Relative_Name": (card.get("Relative_Name") or "").strip(),
-            "Age": (card.get("Age") or "").strip(),
+            "Age": tage,
             "Gender": (card.get("Gender") or "").strip(),
             "House_No": (card.get("House_No") or "").strip(),
             "Part_Section": (card.get("Part_Section") or "").strip(),
@@ -839,10 +914,14 @@ def parse_pages_arg(spec):
 def run_tesseract(pdf_path, stem, page_list, args, logger):
     """Box-level OCR per page. Returns (records, audit_text, n_blocks)."""
     config_full = "--oem 3 --psm 6 -l %s" % args.ocr_lang
+    config_retry = "--oem 3 --psm 3 -l %s" % args.ocr_lang
     config_epic = r"--oem 3 --psm 7 -l eng -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/"
+    config_ageword = r"--oem 3 --psm 8 -l eng -c tessedit_char_whitelist=0123456789"
     doc = _pdf_lib.open(str(pdf_path))
     zoom = args.dpi / 72.0
     records, audit, n_blocks = [], [], 0
+    n_retried = 0
+    n_strip = 0
     for pno in page_list:
         page = doc.load_page(pno - 1)
         pix = page.get_pixmap(matrix=_pdf_lib.Matrix(zoom, zoom))
@@ -861,23 +940,60 @@ def run_tesseract(pdf_path, stem, page_list, args, logger):
             x, y, w, h = b
             x0, y0 = max(0, x - args.padding), max(0, y - args.padding)
             x1, y1 = min(w_i, x + w + args.padding), min(h_i, y + h + args.padding)
-            return ocr_block(img[y0:y1, x0:x1], config_full, config_epic)
+            full, hint, proc = ocr_block(img[y0:y1, x0:x1], config_full, config_epic)
+            try:
+                rec = parse_block(full, tag, epic_hint=hint)
+            except Exception:
+                rec = None
+            # second opinion on the PRIORITY field: bottom strip (age line)
+            # upscaled + single-word digit whitelist. Independent read, cheap.
+            strip_age = ""
+            try:
+                h = proc.shape[0]
+                strip = proc[int(h * 0.62):, :]
+                strip = cv2.resize(strip, None, fx=1.5, fy=1.5,
+                                   interpolation=cv2.INTER_CUBIC)
+                d = pytesseract.image_to_string(strip, config=config_ageword)
+                m = re.search(r"\d{2,3}", d)
+                if m:
+                    strip_age = m.group(0)
+                    n_strip += 1
+            except Exception:
+                pass
+            if rec is not None:
+                rec["AgeStrip"] = strip_age
+            if (not rec or not rec.get("Name")) and full.strip():
+                # PSM 6 found no name: retry fully-automatic segmentation once
+                try:
+                    alt = pytesseract.image_to_string(proc, config=config_retry)
+                    alt = "\n".join(ln.strip() for ln in alt.splitlines() if ln.strip())
+                    rec2 = parse_block(alt, tag, epic_hint=hint) if alt else None
+                    if rec2 and rec2.get("Name"):
+                        return alt, hint, rec2, True
+                except Exception:
+                    pass
+            return full, hint, rec, False
 
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
             ocr_out = list(ex.map(_one, boxes))
         audit.append("FILENAME: %s" % tag)
-        for idx, (txt, hint) in enumerate(ocr_out):
+        for idx, (txt, hint, rec, retried) in enumerate(ocr_out):
             audit.append("--- BLOCK %d ---\n%s" % (idx + 1, txt))
             try:
-                rec = parse_block(txt, tag, epic_hint=hint)
+                if rec is None:
+                    rec = parse_block(txt, tag, epic_hint=hint)
             except Exception as e:
                 logger.warning("tes p%d block %d parse failed: %s", pno, idx + 1, e)
                 rec = None
+            n_retried += bool(retried)
             if rec and (rec.get("Name") or rec.get("Voter_ID")):
                 records.append(rec)
         n_blocks += len(boxes)
         logger.info("tes: page %d done (%d blocks)", pno, len(boxes))
     doc.close()
+    if n_retried:
+        logger.info("tes: PSM-3 retry recovered %d nameless blocks", n_retried)
+    logger.info("tes: age-strip second reads: %d", n_strip)
     return records, "\n".join(audit), n_blocks
 
 
