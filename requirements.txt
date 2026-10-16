@@ -1,0 +1,13 @@
+pymupdf>=1.26.6
+opencv-python>=4.12.0.88
+numpy>=2.2.6
+pytesseract>=0.3.13
+pandas>=2.3.3
+openpyxl>=3.1.5
+pillow>=12.0.0
+# Chrome Screen AI OCR (scripts/chrome_script.py). Windows + Chrome only;
+# comment out if you only need the Tesseract pipeline (scripts/main.py).
+chrome-ocr[pdf]@git+https://github.com/ayismas/chrome-ocr.git
+# torch is NOT required: the legacy stage-3 script used it only for a cosmetic
+# CUDA check and now runs without it. Install manually only if other tools need it.
+# torch>=2.9.1
