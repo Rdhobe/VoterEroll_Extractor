@@ -879,9 +879,13 @@ def write_ensemble(df, xlsx_path, logger):
 
 # ====================================================================== CLI
 def build_parser():
-    p = argparse.ArgumentParser(description="Voter-roll ENSEMBLE v2: Tesseract + Chrome on one PDF.")
-    p.add_argument("--input", required=True, help="Input PDF file (single file)")
+    p = argparse.ArgumentParser(description="Voter-roll ENSEMBLE v2: Tesseract + Chrome, one PDF or a whole tree.")
+    p.add_argument("--input", required=True, help="PDF file or root folder (e.g. D:\\Election_Download\\Uttar_Pradesh)")
     p.add_argument("--output", default="D:\\Election_Output", help="Output folder")
+    p.add_argument("--district", action="append", default=None, help="Folder input only: filter by district (repeatable)")
+    p.add_argument("--ac", action="append", default=None, help="Folder input only: filter by assembly (repeatable)")
+    p.add_argument("--max-pdfs", type=int, default=0, help="Folder input only: at most N PDFs (0=all)")
+    p.add_argument("--dry-run", action="store_true", help="List PDFs only, process nothing")
     p.add_argument("--pages", type=int, default=0, help="Max pages per PDF, testing (0=all)")
     p.add_argument("--start-page", type=int, default=1)
     p.add_argument("--end-page", type=int, default=0, help="0 = last page")
@@ -891,7 +895,7 @@ def build_parser():
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--padding", type=int, default=15)
     p.add_argument("--ocr-lang", default="hin+eng", help="Tesseract langs for boxes")
-    p.add_argument("--resume", action="store_true", help="Skip if ensemble XLSX is fresh")
+    p.add_argument("--resume", action="store_true", help="Skip PDFs whose ensemble XLSX is fresh")
     p.add_argument("--log-file", default=None)
     p.add_argument("--verbose", action="store_true")
     return p
@@ -909,6 +913,56 @@ def parse_pages_arg(spec):
         elif part:
             pages.add(int(part))
     return sorted(pages)
+
+
+def discover_pdfs(input_root, district=None, ac=None, max_pdfs=0):
+    root = Path(input_root)
+    if root.is_file() and root.suffix.lower() == ".pdf":
+        return [root]
+    # fast path: a single --district naming a top-level folder scans just it
+    keys = []
+    if district:
+        keys = [district] if isinstance(district, str) else list(district)
+    walk = [root]
+    if len(keys) == 1:
+        cand = root / keys[0]
+        if cand.is_dir():
+            walk = [cand]
+        else:
+            hit = [d for d in root.iterdir() if d.is_dir() and keys[0].lower() in d.name.lower()]
+            if len(hit) == 1:
+                walk = hit
+    pdfs = []
+    for w in walk:
+        pdfs.extend(sorted(w.rglob("*.pdf")))
+    pdfs = sorted(set(pdfs))
+    if district:
+        keys = [district] if isinstance(district, str) else district
+        pdfs = [p for p in pdfs if any(k.lower() in str(p).lower() for k in keys)]
+    if ac:
+        keys = [ac] if isinstance(ac, str) else ac
+        pdfs = [p for p in pdfs if any(k.lower() in str(p).lower() for k in keys)]
+    if max_pdfs and max_pdfs > 0:
+        pdfs = pdfs[:max_pdfs]
+    return pdfs
+
+
+def load_state(state_path):
+    try:
+        import json
+        with open(state_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"completed": {}}
+
+
+def save_state(state_path, state):
+    import json
+    Path(state_path).parent.mkdir(parents=True, exist_ok=True)
+    tmp = str(state_path) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=1)
+    os.replace(tmp, state_path)
 
 
 def run_tesseract(pdf_path, stem, page_list, args, logger):
@@ -1044,30 +1098,22 @@ def quiet_chrome_stderr(quiet=True):
         os.close(old)
 
 
-def main(argv=None):
-    args = build_parser().parse_args(argv)
-    out_dir = Path(args.output)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    logger = setup_logger(args.log_file or str(out_dir / "ensemble.log"), args.verbose)
-
-    pdf = Path(args.input)
-    if not pdf.is_file() or pdf.suffix.lower() != ".pdf":
-        logger.error("Single PDF file required (bulk = scripts/main.py). Got: %s", args.input)
-        return 1
+def run_one_pdf(pdf, out_dir, args, logger, state):
+    """Full ensemble for a single PDF. Returns done/skipped/error."""
+    pdf = Path(pdf)
     stem = pdf.stem
     xlsx_path = out_dir / (stem + "_ensemble.xlsx")
+    rel = str(pdf)
     if args.resume and xlsx_path.exists():
         try:
             if xlsx_path.stat().st_mtime >= pdf.stat().st_mtime:
-                logger.info("SKIP (resume): ensemble XLSX is fresh.")
-                return 0
+                logger.info("SKIP (resume): %s fresh.", xlsx_path.name)
+                return "skipped"
         except OSError:
             pass
 
-    if not ensure_tesseract(logger):
-        return 2
-    _silence_fitz_shim_v2()
-
+    t0 = time.time()
+    logger.info("START %s (%s MB)", pdf.name, round(pdf.stat().st_size / 1e6, 1))
     doc = _pdf_lib.open(str(pdf))
     n_pdf = doc.page_count
     doc.close()
@@ -1075,17 +1121,16 @@ def main(argv=None):
     e = args.end_page if args.end_page > 0 else n_pdf
     e = min(e, n_pdf)
     pages = list(range(s, e + 1))
-    if args.pages > 0:
-        pages = pages[:args.pages]
     skip = set(parse_pages_arg(args.skip_pages) or [])
     pages = [p for p in pages if p not in skip]
+    if args.pages > 0:  # testing limit applies AFTER skipping (N data pages)
+        pages = pages[:args.pages]
     logger.info("%s: %d pages (%d PDF pages, skip %s)", stem, len(pages), n_pdf,
                 args.skip_pages or "none")
     if not pages:
         logger.error("No pages left.")
-        return 1
+        return "error"
 
-    t0 = time.time()
     logger.info("=== STAGE 1a: Tesseract (%d pages) ===", len(pages))
     tes_cards, tes_audit, n_blocks = run_tesseract(str(pdf), stem, pages, args, logger)
     (out_dir / (stem + "_tes.txt")).write_text(
@@ -1098,7 +1143,7 @@ def main(argv=None):
         chr_cards, chr_raw = run_chrome(str(pdf), pages, args, logger)
     except RuntimeError as err:
         logger.error("%s", err)
-        return 1
+        return "error"
     (out_dir / (stem + "_chrome_raw.md")).write_text(
         "# %s (raw shuffled)\n\n" % stem + "\n\n".join(chr_raw), encoding="utf-8")
     logger.info("chrome: %d cards", len(chr_cards))
@@ -1110,13 +1155,77 @@ def main(argv=None):
         write_ensemble(df, str(xlsx_path), logger)
     except PermissionError:
         logger.error("CLOSE %s in Excel and re-run (file locked).", xlsx_path.name)
-        return 1
+        return "error"
     by_match = df["Match"].fillna("").value_counts().to_dict()
     n_conf = int((df["Conflicts"].fillna("") != "").sum())
     n_hard = sum(1 for r in merged if r.get("_hard"))
     logger.info("MERGED: %d rows (match=%s), %d noted (%d hard conflicts), %.1fs -> %s",
                 len(df), by_match, n_conf, n_hard, time.time() - t0, xlsx_path.name)
-    return 0
+    state.setdefault("completed", {})[rel] = {
+        "xlsx": str(xlsx_path), "rows": int(len(df)),
+        "seconds": round(time.time() - t0, 1), "ts": time.time()}
+    return "done"
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    out_root = Path(args.output)
+    out_root.mkdir(parents=True, exist_ok=True)
+    logger = setup_logger(args.log_file or str(out_root / "ensemble.log"), args.verbose)
+
+    if not ensure_tesseract(logger):
+        return 2
+    _silence_fitz_shim_v2()
+
+    in_root = Path(args.input)
+    if in_root.is_file():
+        if in_root.suffix.lower() != ".pdf":
+            logger.error("Not a PDF: %s", args.input)
+            return 1
+        pdfs = [in_root]
+        multi = False
+    elif in_root.is_dir():
+        pdfs = discover_pdfs(str(in_root), args.district, args.ac, args.max_pdfs)
+        multi = True
+    else:
+        logger.error("Not found: %s", args.input)
+        return 1
+
+    logger.info("Input=%s Output=%s resume=%s (%d PDFs)",
+                args.input, args.output, args.resume, len(pdfs))
+    if args.dry_run:
+        for p in pdfs[:50]:
+            logger.info("  %s", p)
+        if len(pdfs) > 50:
+            logger.info("  ... +%d more", len(pdfs) - 50)
+        return 0
+    if not pdfs:
+        logger.error("No PDFs under %s", args.input)
+        return 1
+    if multi and len(pdfs) > 20:
+        logger.warning("%d PDFs at ~4 min each - start small "
+                       "(--district X --max-pdfs 2 --pages 2) to validate.", len(pdfs))
+
+    state_path = out_root / "ensemble_state.json"
+    state = load_state(state_path)
+    stats = {"done": 0, "skipped": 0, "error": 0}
+    for i, pdf in enumerate(pdfs, 1):
+        out_dir = out_root / pdf.parent.relative_to(in_root) if multi else out_root
+        out_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("[%d/%d] %s", i, len(pdfs), pdf)
+        try:
+            r = run_one_pdf(pdf, out_dir, args, logger, state)
+            stats[r] = stats.get(r, 0) + 1
+        except KeyboardInterrupt:
+            logger.warning("Interrupted; progress saved. Re-run with --resume.")
+            save_state(state_path, state)
+            return 130
+        except Exception:
+            logger.exception("Fatal on %s", pdf)
+            stats["error"] += 1
+        save_state(state_path, state)
+    logger.info("FINISHED: %s", stats)
+    return 0 if stats.get("error", 0) == 0 else 1
 
 
 def _silence_fitz_shim_v2():

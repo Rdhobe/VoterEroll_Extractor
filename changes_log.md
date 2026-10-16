@@ -90,6 +90,20 @@ scaling it to bulk runs on `D:\Election_Download\Uttar_Pradesh`. Dates in 2026-1
   adaptation guide retargeted at `main.py`; legacy script notes kept.
 - This file (`changes_log.md`).
 
+## 21. Ensemble runs like main.py (multi-PDF, dry-run, resume)
+
+- `ensemble_v2.py` accepts a file **or** folder: `--district/--ac` filters,
+  `--max-pdfs`, `--dry-run` listing, `ensemble_state.json` checkpoints +
+  fresh-XLSX skip (`--resume`), `[i/N]` progress, per-PDF fault isolation.
+  Folder outputs mirror the input tree (`Agra/AC_86_Etmadpur/…`); single-file
+  outputs stay flat in `--output` as before.
+- Perf: district-scoped discovery fast-path (single `--district` matching a
+  top-level folder scans only it, outputs still mirrored from the real root).
+- Semantics fix: `--pages` now counts data pages *after* `--skip-pages`
+  (`--pages 2` = 2 voter pages, not the skipped covers).
+- Verified: dry-run lists 5, `--pages 2` → 72 rows (~20 s), `--resume` → SKIP,
+  2-PDF folder run → mirrored outputs + state, full roll re-run → 806 rows.
+
 ## 20. Stats consolidated into docs
 
 - `README.md` §6 "Measured accuracy": full GT table (TES/CHR/ENS final numbers),

@@ -114,24 +114,35 @@ clear `CLOSE … in Excel and re-run with --resume` error instead of a traceback
 run assembly-by-assembly, validate the first XLSXs, then split `--district`s across
 machines (one output folder each).
 
-### Ensemble v2 – Tesseract + Chrome on one PDF (`scripts/ensemble_v2.py`)
+### Ensemble v2 – Tesseract + Chrome (`scripts/ensemble_v2.py`)
 
 `scripts/main.py` (Tesseract) and `scripts/chrome_script.py` (Chrome) are frozen
-v1 – this self-contained v2 runs **both engines on a single PDF and merges them**
-field-by-field, so it can never break the v1 commands:
+v1 – this self-contained v2 runs **both engines and merges them** field-by-field,
+so it can never break the v1 commands. Same three run shapes as `main.py`:
 
 ```powershell
-python scripts/ensemble_v2.py --input "D:\Election_Download\Uttar_Pradesh\Agra\AC_86_Etmadpur\2026-EROLLGEN-S24-86-SIR-FinalRoll-Revision1-HIN-1-WI.pdf" --output "D:\Election_Output"
+# quick test: 2 data pages of one roll
+python scripts/ensemble_v2.py --input "D:\Election_Download\Uttar_Pradesh\Agra\AC_86_Etmadpur\2026-EROLLGEN-S24-86-SIR-FinalRoll-Revision1-HIN-1-WI.pdf" --output "D:\Election_Output" --pages 2
+
+# one assembly, resumable (outputs mirror Agra/AC_86_Etmadpur/ under output)
+python scripts/ensemble_v2.py --input "D:\Election_Download\Uttar_Pradesh" --district Agra --ac AC_86_Etmadpur --output "D:\Election_Output" --resume
+
+# list what would run, without processing
+python scripts/ensemble_v2.py --input "D:\Election_Download\Uttar_Pradesh" --district Agra --dry-run --max-pdfs 5
 ```
 
-Outputs (beside the input stem): `<stem>_ensemble.xlsx + .csv` (merged table),
+Extra flags over `main.py`: `--chrome-dpi` (default 200), `--ocr-lang`
+(default `hin+eng`); `--pages` counts data pages *after* `--skip-pages`
+(default `1,2`); resume state in `<output>/ensemble_state.json`.
+Single-file outputs sit directly in `--output`:
+`<stem>_ensemble.xlsx + .csv` (merged table),
 `<stem>_tes.txt` + `<stem>_chrome_raw.md` (per-engine audits). Matching runs
-name → ID → serial; every disagreement lands in `Conflicts`, single-engine-only
-rows are kept (`tes-only` / `chrome-only`), agreed rows need no review.
-Measured on the Agra test roll: 804 rows, 604 name-matched; on matched voters
-Gender 98.4% / Relative 88.5% / Age 80.4% agree, Voter_ID only 26.5% (ID↔voter
-linking is the weak link on both sides – adjudicate IDs per-field, don't trust
-either blindly). Note: Chrome Screen AI is slightly nondeterministic – reruns of
+name → fuzzy name → ID → serial; every disagreement lands in `Conflicts`,
+single-engine-only rows are kept (`tes-only` / `chrome-only`), agreed rows need
+no review.
+Measured on the Agra test roll: 806 rows (606 name / 89 tes-only / 78 chrome-only /
+29 id / 4 serial). See §6 for the full accuracy table.
+Note: Chrome Screen AI is slightly nondeterministic – reruns of
 the same page can differ by a character or two.
 
 ---
